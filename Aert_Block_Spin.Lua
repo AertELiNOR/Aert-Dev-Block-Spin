@@ -1,5 +1,5 @@
 -- =========================================================
--- Aert-Dev | Block Spin Script (Fixed Edition)
+-- Aert-Dev | Block Spin Script (Fixed TransportService Error)
 -- =========================================================
 
 local Players = game:GetService("Players")
@@ -11,6 +11,8 @@ local Stats = game:GetService("Stats")
 local NetworkStats = Stats.Network.ServerStatsItem["Data Ping"]
 local HttpService = game:GetService("HttpService")
 local CoreGui = game:GetService("CoreGui")
+local TeleportService = game:GetService("TeleportService")
+local VirtualInputManager = game:GetService("VirtualInputManager") -- เพิ่มบริการจำลองการกดปุ่ม
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
@@ -29,6 +31,8 @@ local Config = {
     ShowFOV = true,
     
     ESP = true,
+    ESP_DisplayName = true,
+    ESP_Username = true,
     ESP_HealthText = true,
     ESP_HealthBar = true,
     ESP_Item = true,
@@ -43,7 +47,12 @@ local Config = {
     GodMode = false,
     NoFallDamage = false,
     
-    ToggleKey = Enum.KeyCode.RightControl
+    QuickRebirthKey = Enum.KeyCode.K,
+    QuickExitKey = Enum.KeyCode.L,
+    RejoinKey = Enum.KeyCode.R,
+    ToggleKey = Enum.KeyCode.RightControl,
+    ServerHopMassKey = Enum.KeyCode.H,
+    ServerHopSmallKey = Enum.KeyCode.KeypadPlus
 }
 
 -- Config Save & Load System
@@ -72,7 +81,7 @@ local function LoadConfig()
         end)
         if success and type(data) == "table" then
             for k, v in pairs(data) do
-                if (k == "ToggleKey" or k == "AimbotKey" or k == "AimbotToggleKey") and type(v) == "string" then
+                if (k == "ToggleKey" or k == "AimbotKey" or k == "AimbotToggleKey" or k == "ServerHopMassKey" or k == "ServerHopSmallKey" or k == "QuickExitKey" or k == "QuickRebirthKey" or k == "RejoinKey") and type(v) == "string" then
                     local successKey, keyEnum = pcall(function() return Enum.KeyCode[v] end)
                     local successMouse, mouseEnum = pcall(function() return Enum.UserInputType[v] end)
                     
@@ -92,7 +101,106 @@ end
 LoadConfig()
 
 ------------------------------------------------------------------
--- 0. Item Database & Scanner Engine
+-- Quick Exit, Rebirth & Rejoin Functions (Macro Sequences)
+------------------------------------------------------------------
+local function sendKeySequence(keys)
+    for _, keyCode in ipairs(keys) do
+        VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+        task.wait(0.05)
+        VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+        task.wait(0.05)
+    end
+end
+
+-- Quick Exit: ESC > L > Enter
+local function QuickExit()
+    print("[Aert-Dev] Executing Quick Exit Macro...")
+    sendKeySequence({
+        Enum.KeyCode.Escape,
+        Enum.KeyCode.L,
+        Enum.KeyCode.Return
+    })
+end
+
+-- Quick Rebirth: ESC > R > Enter
+local function TriggerRebirth()
+    print("[Aert-Dev] Executing Quick Rebirth Macro...")
+    sendKeySequence({
+        Enum.KeyCode.Escape,
+        Enum.KeyCode.R,
+        Enum.KeyCode.Return
+    })
+end
+
+local function RejoinServer()
+    pcall(function()
+        if #Players:GetPlayers() <= 1 then
+            LocalPlayer:Kick("[Aert-Dev] Rejoining server...")
+            task.wait(0.5)
+            TeleportService:Teleport(game.PlaceId, LocalPlayer)
+        else
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+        end
+    end)
+end
+
+------------------------------------------------------------------
+-- Server Hop Logic (Strict Filter for Small & Ping < 270 for Mass)
+------------------------------------------------------------------
+local function FetchServers(cursor, sortOrder)
+    sortOrder = sortOrder or "Desc"
+    local url = string.format("https://games.roblox.com/v1/games/%s/servers/0?sortOrder=%s&limit=100%s", tostring(game.PlaceId), sortOrder, cursor and ("&cursor=" .. cursor) or "")
+    local success, result = pcall(function()
+        return HttpService:JSONDecode(game:HttpGet(url))
+    end)
+    if success and result then
+        return result
+    end
+    return nil
+end
+
+local function ServerHopFiltered(mode)
+    local placeId = game.PlaceId
+    local currentJobId = game.JobId
+    local validServers = {}
+    local cursor = nil
+    local pagesChecked = 0
+    local sortOrder = (mode == "small") and "Asc" or "Desc"
+
+    repeat
+        pagesChecked = pagesChecked + 1
+        local res = FetchServers(cursor, sortOrder)
+        if res and res.data then
+            for _, server in ipairs(res.data) do
+                if type(server) == "table" and server.id ~= currentJobId and server.playing < server.maxPlayers then
+                    if mode == "mass" then
+                        local ping = server.ping or 150
+                        if server.playing > 10 and ping < 270 then
+                            table.insert(validServers, server.id)
+                        end
+                    elseif mode == "small" then
+                        if server.playing <= 10 and server.playing > 0 then
+                            table.insert(validServers, server.id)
+                        end
+                    end
+                end
+            end
+            cursor = res.nextPageCursor
+        else
+            break
+        end
+    until not cursor or #validServers >= 15 or pagesChecked >= 5
+
+    if #validServers > 0 then
+        local targetJobId = validServers[math.random(1, #validServers)]
+        TeleportService:TeleportToPlaceInstance(placeId, targetJobId, LocalPlayer)
+    else
+        TeleportService:Teleport(placeId, LocalPlayer)
+    end
+end
+
+------------------------------------------------------------------
+-- Item Database & Scanner Engine
 ------------------------------------------------------------------
 local WeaponDB = {}
 local PreloadedImages = {}
@@ -116,8 +224,62 @@ local RARITY_RANK = {
     ["Omega"] = 6
 }
 
+local IGNORED_PROPS = {
+    "gaspump", "interior", "furniture", "milkshake", "cases", "gunsnammo",
+    "store", "shop", "building", "door", "ladder", "trash", "atm", "vending",
+    "car", "vehicle", "van", "tree", "light", "spawn", "safezone", "baseplate", "terrain",
+    "showcase", "display", "counter", "shelf", "stand", "pipe", "sewer", "sign",
+    "burger", "camera", "pole", "post", "road", "street", "grass", "branch", "leafy",
+    "structure", "model", "wash", "celltower", "silo", "fence"
+}
+
+local MAP_KEYWORDS = {
+    "map", "building", "environment", "prop", "world", "street", "road",
+    "structure", "decoration", "scenery", "furniture", "store", "shop", "sign",
+    "pipe", "tree", "plant", "silo", "tower", "camera", "light", "fence", "door"
+}
+
+local function isIgnoredProp(name)
+    if not name then return true end
+    local lowerName = name:lower()
+    for _, word in ipairs(IGNORED_PROPS) do
+        if lowerName:find(word) then return true end
+    end
+    return false
+end
+
+local function isMapProp(obj)
+    if not obj or obj == workspace then return false end
+    local current = obj
+    while current and current ~= workspace do
+        local lowerName = current.Name:lower()
+        for _, keyword in ipairs(MAP_KEYWORDS) do
+            if lowerName:find(keyword) then return true end
+        end
+        current = current.Parent
+    end
+    return false
+end
+
+local function isShopOrDisplayProp(root)
+    if not root then return true end
+    local rootName = root.Name:lower()
+    if rootName:find("display") or rootName:find("showcase") or rootName:find("prop") then return true end
+
+    local parent = root.Parent
+    if parent and parent ~= workspace then
+        local pName = parent.Name:lower()
+        if pName:find("case") or pName:find("display") or pName:find("showcase") 
+           or pName:find("shelf") or pName:find("counter") or pName:find("stand")
+           or pName:find("gunsnammo") or pName:find("vendor") then
+            return true
+        end
+    end
+    return false
+end
+
 local function generateUniqueKey(tool)
-    if not tool or not tool:IsA("Tool") then return nil end
+    if not tool or not (tool:IsA("Tool") or tool:IsA("Model")) then return nil end
     local itemId = tool:GetAttribute("ItemId") or tool:GetAttribute("Id")
     if itemId and itemId ~= "" and (typeof(itemId) == "string" or typeof(itemId) == "number") then
         return "ITEMID_" .. tostring(itemId)
@@ -131,8 +293,6 @@ local function generateUniqueKey(tool)
             table.insert(partsData, "MESH_"..part.MeshId.."|TEX_"..(part.TextureID or "NOTEX"))
         elseif part:IsA("Decal") and part.Texture and part.Texture ~= "" and part.Texture ~= "rbxassetid://" then
             table.insert(partsData, "DECAL_"..part.Texture)
-        elseif part:IsA("Part") then
-            table.insert(partsData, "PART_"..part.Name.."_"..part.Size.X.."x"..part.Size.Y.."x"..part.Size.Z)
         end
     end
     
@@ -168,9 +328,7 @@ local function registerItems(folder)
         if imageId and imageId ~= "" and not PreloadedImages[imageId] then
             PreloadedImages[imageId] = true
             task.spawn(function()
-                pcall(function()
-                    ContentProvider:PreloadAsync({imageId})
-                end)
+                pcall(function() ContentProvider:PreloadAsync({imageId}) end)
             end)
         end
     end
@@ -188,13 +346,13 @@ pcall(function()
 end)
 
 local function getWeaponInfo(tool)
-    if not tool or not tool:IsA("Tool") then return nil end
+    if not tool then return nil end
     local key = generateUniqueKey(tool)
     return WeaponDB[key]
 end
 
 ------------------------------------------------------------------
--- 1. Drawing API & Target Selection
+-- Drawing API & Target Selection
 ------------------------------------------------------------------
 local FOVCircle = Drawing.new("Circle")
 FOVCircle.Color = Color3.fromRGB(255, 255, 255)
@@ -240,7 +398,7 @@ local function getClosestPlayerToCenter()
 end
 
 ------------------------------------------------------------------
--- 2. UI Creation & Modern Dark Theme Interface
+-- UI Creation & Modern Dark Theme Interface
 ------------------------------------------------------------------
 local ProtectedGui = (gethui and gethui()) or CoreGui
 if ProtectedGui:FindFirstChild("AertDevUI") then ProtectedGui.AertDevUI:Destroy() end
@@ -253,7 +411,7 @@ if gethui then ScreenGui.Parent = gethui()
 elseif syn and syn.protect_gui then syn.protect_gui(ScreenGui); ScreenGui.Parent = CoreGui
 else ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
--- ปุ่มลอยแบบ Text สไตล์โมเดิร์น รองรับการลากย้ายที่
+-- Floating Toggle Button
 local FloatingToggle = Instance.new("TextButton")
 FloatingToggle.Size = UDim2.new(0, 110, 0, 38)
 FloatingToggle.Position = UDim2.new(0, 25, 0.5, -19)
@@ -275,7 +433,7 @@ FTStroke.Color = Color3.fromRGB(99, 102, 241)
 FTStroke.Thickness = 1.5
 FTStroke.Parent = FloatingToggle
 
--- ป้ายแสดง FPS & Ping (ขยายความกว้างเป็น 210 พิกเซล ให้มีพื้นที่กว้างขึ้น)
+-- FPS & Ping Label
 local StatsLabel = Instance.new("TextLabel")
 StatsLabel.Size = UDim2.new(0, 210, 0, 28)
 StatsLabel.Position = UDim2.new(0, 145, 0, 15)
@@ -286,7 +444,6 @@ StatsLabel.Font = Enum.Font.Code
 StatsLabel.TextSize = 12
 StatsLabel.RichText = true
 StatsLabel.Text = " FPS:  60 | Ping:   0ms"
-StatsLabel.AutomaticSize = Enum.AutomaticSize.None
 StatsLabel.TextXAlignment = Enum.TextXAlignment.Left
 StatsLabel.Parent = ScreenGui
 
@@ -299,7 +456,7 @@ StatsStroke.Color = Color3.fromRGB(45, 45, 60)
 StatsStroke.Thickness = 1
 StatsStroke.Parent = StatsLabel
 
--- ป้ายแสดงสถานะ Aimbot (ขยายความกว้างเป็น 210 พิกเซล ให้เท่ากัน)
+-- Aimbot Status Label
 local AimbotStatusLabel = Instance.new("TextLabel")
 AimbotStatusLabel.Size = UDim2.new(0, 210, 0, 28)
 AimbotStatusLabel.Position = UDim2.new(0, 145, 0, 50)
@@ -310,7 +467,6 @@ AimbotStatusLabel.Font = Enum.Font.Code
 AimbotStatusLabel.TextSize = 12
 AimbotStatusLabel.RichText = true
 AimbotStatusLabel.Text = ' Aimbot: <font color="#FF4D4D">OFF</font>'
-AimbotStatusLabel.AutomaticSize = Enum.AutomaticSize.None
 AimbotStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 AimbotStatusLabel.Parent = ScreenGui
 
@@ -323,7 +479,30 @@ ASStroke.Color = Color3.fromRGB(45, 45, 60)
 ASStroke.Thickness = 1
 ASStroke.Parent = AimbotStatusLabel
 
--- Modern Dark Styled MainFrame
+-- Player Count Label (Enhanced & Made More Prominent)
+local PlayerCountLabel = Instance.new("TextLabel")
+PlayerCountLabel.Size = UDim2.new(0, 210, 0, 32)
+PlayerCountLabel.Position = UDim2.new(0, 145, 0, 85)
+PlayerCountLabel.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
+PlayerCountLabel.BackgroundTransparency = 0.15
+PlayerCountLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+PlayerCountLabel.Font = Enum.Font.GothamBold
+PlayerCountLabel.TextSize = 13
+PlayerCountLabel.RichText = true
+PlayerCountLabel.Text = ' 👥 Players: <font color="#38BDF8"><b>0/0</b></font>'
+PlayerCountLabel.TextXAlignment = Enum.TextXAlignment.Left
+PlayerCountLabel.Parent = ScreenGui
+
+local PCCorner = Instance.new("UICorner")
+PCCorner.CornerRadius = UDim.new(0, 8)
+PCCorner.Parent = PlayerCountLabel
+
+local PCStroke = Instance.new("UIStroke")
+PCStroke.Color = Color3.fromRGB(99, 102, 241)
+PCStroke.Thickness = 1.5
+PCStroke.Parent = PlayerCountLabel
+
+-- Main UI Frame
 local MainFrame = Instance.new("Frame")
 MainFrame.Size = UDim2.new(0, 580, 0, 400)
 MainFrame.Position = UDim2.new(0.5, -290, 0.5, -200)
@@ -458,6 +637,29 @@ local function createSectionTitle(page, title)
     lbl.TextSize = 12
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.Parent = page
+end
+
+local function createButton(page, text, callback)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, -10, 0, 42)
+    frame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+    frame.Parent = page
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = frame
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(99, 102, 241)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 13
+    btn.Parent = frame
+
+    btn.MouseButton1Click:Connect(function() callback(btn) end)
+    return btn
 end
 
 local function createSwitch(page, text, defaultConfig, callback)
@@ -681,11 +883,11 @@ createSlider(CombatPage, "FOV Radius", 50, 800, Config.FOV, false, function(v) C
 
 createSectionTitle(ESPPage, "PLAYER ESP")
 createSwitch(ESPPage, "Enable ESP", Config.ESP, function(v) Config.ESP = v end)
+createSwitch(ESPPage, "Show Display Name", Config.ESP_DisplayName, function(v) Config.ESP_DisplayName = v end)
+createSwitch(ESPPage, "Show Username", Config.ESP_Username, function(v) Config.ESP_Username = v end)
 createSwitch(ESPPage, "Show Health Text (HP)", Config.ESP_HealthText, function(v) Config.ESP_HealthText = v end)
 createSwitch(ESPPage, "Show Health Bar", Config.ESP_HealthBar, function(v) Config.ESP_HealthBar = v end)
 createSwitch(ESPPage, "Show Held Item (Uncommon+)", Config.ESP_Item, function(v) Config.ESP_Item = v end)
-
-createSectionTitle(ESPPage, "GROUND ITEM ESP")
 
 createSectionTitle(CharacterPage, "MOVEMENT & HEALTH")
 createSwitch(CharacterPage, "WalkSpeed Hack", Config.WalkSpeedEnabled, function(v) Config.WalkSpeedEnabled = v end)
@@ -696,13 +898,33 @@ createSwitch(CharacterPage, "Infinite Stamina", Config.InfiniteStamina, function
 createSwitch(CharacterPage, "God Mode", Config.GodMode, function(v) Config.GodMode = v end)
 createSwitch(CharacterPage, "No Fall Damage", Config.NoFallDamage, function(v) Config.NoFallDamage = v end)
 
-createSectionTitle(MiscPage, "SETTINGS")
-createKeybind(MiscPage, "Toggle Menu Keybind", Config.ToggleKey, function(newKey)
-    Config.ToggleKey = newKey
+createSectionTitle(MiscPage, "QUICK ACTIONS & REBIRTH")
+createButton(MiscPage, "Rejoin Server", function() RejoinServer() end)
+createKeybind(MiscPage, "Rejoin Keybind", Config.RejoinKey, function(newKey) Config.RejoinKey = newKey end)
+
+createButton(MiscPage, "Quick Exit Game (ESC > L > Enter)", function() QuickExit() end)
+createKeybind(MiscPage, "Quick Exit Keybind", Config.QuickExitKey, function(newKey) Config.QuickExitKey = newKey end)
+
+createButton(MiscPage, "Quick Rebirth Now (ESC > R > Enter)", function() TriggerRebirth() end)
+createKeybind(MiscPage, "Quick Rebirth Keybind", Config.QuickRebirthKey, function(newKey) Config.QuickRebirthKey = newKey end)
+
+createSectionTitle(MiscPage, "SETTINGS & UTILITIES")
+createKeybind(MiscPage, "Toggle Menu Keybind", Config.ToggleKey, function(newKey) Config.ToggleKey = newKey end)
+
+createButton(MiscPage, "Server Hop Mass (>10 Players, Ping < 270)", function(btn)
+    btn.Text = "Hopping Mass Server..."
+    ServerHopFiltered("mass")
 end)
+createKeybind(MiscPage, "Server Hop Mass Keybind", Config.ServerHopMassKey, function(newKey) Config.ServerHopMassKey = newKey end)
+
+createButton(MiscPage, "Server Hop Small (<=10 Players)", function(btn)
+    btn.Text = "Hopping Small Server..."
+    ServerHopFiltered("small")
+end)
+createKeybind(MiscPage, "Server Hop Small Keybind", Config.ServerHopSmallKey, function(newKey) Config.ServerHopSmallKey = newKey end)
 
 ------------------------------------------------------------------
--- 3. Dynamic Real-time Combined Player ESP System
+-- ESP Systems & Main Loops
 ------------------------------------------------------------------
 local function createCombinedESP(player)
     if player == LocalPlayer then return end
@@ -841,18 +1063,6 @@ local function createCombinedESP(player)
         for _, child in ipairs(itemContainer:GetChildren()) do
             if child:IsA("Frame") then child:Destroy() end
         end
-        
-        local grid = itemContainer:FindFirstChild("UIGridLayout")
-        if not grid then
-            grid = Instance.new("UIGridLayout")
-            grid.Name = "UIGridLayout"
-            grid.CellSize = UDim2.new(0, 38, 0, 38)
-            grid.CellPadding = UDim2.new(0, 4, 0, 4)
-            grid.HorizontalAlignment = Enum.HorizontalAlignment.Center
-            grid.VerticalAlignment = Enum.VerticalAlignment.Center
-            grid.SortOrder = Enum.SortOrder.LayoutOrder
-            grid.Parent = itemContainer
-        end
 
         if #currentTools > 0 then
             itemContainer.Visible = true
@@ -892,9 +1102,7 @@ local function createCombinedESP(player)
 
     local function checkInSafeZone(char, hrp)
         if not hrp then return false end
-        if char:GetAttribute("SafeZone") or char:GetAttribute("InSafeZone") or player:GetAttribute("SafeZone") then
-            return true
-        end
+        if char:GetAttribute("SafeZone") or char:GetAttribute("InSafeZone") or player:GetAttribute("SafeZone") then return true end
         local safeZonesFolder = workspace:FindFirstChild("SafeZones") or workspace:FindFirstChild("SafeZone")
         if safeZonesFolder then
             for _, zone in ipairs(safeZonesFolder:GetDescendants()) do
@@ -950,7 +1158,18 @@ local function createCombinedESP(player)
                 nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
             end
 
-            nameLabel.Text = string.format("%s (@%s)", player.DisplayName, player.Name)
+            if Config.ESP_DisplayName or Config.ESP_Username then
+                nameLabel.Visible = true
+                if Config.ESP_DisplayName and Config.ESP_Username then
+                    nameLabel.Text = string.format("%s (@%s)", player.DisplayName, player.Name)
+                elseif Config.ESP_DisplayName then
+                    nameLabel.Text = player.DisplayName
+                elseif Config.ESP_Username then
+                    nameLabel.Text = "@" .. player.Name
+                end
+            else
+                nameLabel.Visible = false
+            end
 
             local cf = hrp.CFrame
             local size = char:GetExtentsSize()
@@ -1020,7 +1239,7 @@ Players.PlayerRemoving:Connect(function(p)
 end)
 
 ------------------------------------------------------------------
--- 4. Pure Ground Item ESP System (Integrated Cleanly)
+-- Ground Item ESP System
 ------------------------------------------------------------------
 if CoreGui:FindFirstChild("PureGroundItemESP") then
     CoreGui.PureGroundItemESP:Destroy()
@@ -1029,99 +1248,77 @@ end
 local GroundItemScreenGui = Instance.new("ScreenGui")
 GroundItemScreenGui.Name = "PureGroundItemESP"
 GroundItemScreenGui.ResetOnSpawn = false
-if gethui then
-    GroundItemScreenGui.Parent = gethui()
-else
-    GroundItemScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-end
-
-local GroundItemRarityColors = {
-    ["Common"] = Color3.fromRGB(200, 200, 200),
-    ["Uncommon"] = Color3.fromRGB(0, 255, 0),
-    ["Rare"] = Color3.fromRGB(0, 150, 255),
-    ["Epic"] = Color3.fromRGB(163, 53, 238),
-    ["Legendary"] = Color3.fromRGB(255, 165, 0),
-}
+if gethui then GroundItemScreenGui.Parent = gethui()
+else GroundItemScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local TrackedGroundItems = {}
 
-local function getTargetPartForGroundItem(obj)
-    if obj:IsA("Tool") then
-        return obj:FindFirstChild("Handle") or obj:FindFirstChildWhichIsA("BasePart", true)
-    elseif obj:IsA("Model") then
-        return obj.PrimaryPart or obj:FindFirstChild("Handle") or obj:FindFirstChildWhichIsA("BasePart", true)
-    elseif obj:IsA("BasePart") then
-        return obj
+local function isCharacterOrPlayer(obj)
+    if not obj or obj == workspace or obj == workspace.CurrentCamera then return true end
+    if obj:IsDescendantOf(Players) then return true end
+    local model = obj:FindFirstAncestorOfClass("Model")
+    if model and (model:FindFirstChildOfClass("Humanoid") or model:FindFirstChild("Head")) then return true end
+    return false
+end
+
+local function getGroundItemRoot(obj)
+    if not obj or isCharacterOrPlayer(obj) then return nil end
+    if isIgnoredProp(obj.Name) or isShopOrDisplayProp(obj) or isMapProp(obj) then return nil end
+    if obj:IsA("Tool") then return obj end
+    if obj:IsA("Model") and not obj:FindFirstChildOfClass("Humanoid") then
+        if getWeaponInfo(obj) then return obj end
+        local toolChild = obj:FindFirstChildOfClass("Tool")
+        if toolChild then return toolChild end
+        local attrName = obj:GetAttribute("DisplayName") or obj:GetAttribute("ItemId") or obj:GetAttribute("Item")
+        if attrName then return obj end
+        local parentName = obj.Parent and obj.Parent.Name:lower() or ""
+        if parentName:find("drop") or parentName:find("item") or parentName:find("debris") then
+            if obj:FindFirstChild("Handle") then return obj end
+        end
     end
     return nil
 end
 
-local function getGroundItemInfo(obj)
-    local name = obj.Name
-    local nameLower = name:lower()
-    local rarity = "Common"
-    
-    if nameLower:find("glock") then
-        rarity = "Rare"
-    elseif nameLower:find("ammo") or nameLower:find("buckshot") then
-        rarity = "Uncommon"
-    elseif nameLower:find("shotgun") or nameLower:find("rifle") then
-        rarity = "Rare"
+local function getTargetPartForGroundItem(root)
+    if root:IsA("Tool") then
+        return root:FindFirstChild("Handle") or root:FindFirstChildWhichIsA("BasePart", true)
+    elseif root:IsA("Model") then
+        return root.PrimaryPart or root:FindFirstChild("Handle") or root:FindFirstChildWhichIsA("BasePart", true)
     end
-    
-    return name, GroundItemRarityColors[rarity] or Color3.fromRGB(200, 200, 200)
+    return nil
 end
 
-local function isAllowedGroundItem(obj)
-    if not obj or not obj.Parent then return false end
-    if obj == workspace.CurrentCamera then return false end
-
-    if obj:IsDescendantOf(Players) then return false end
-    local model = obj:FindFirstAncestorOfClass("Model")
-    if model and model:FindFirstChildOfClass("Humanoid") then
-        return false
+local function getGroundItemDetails(root)
+    if isIgnoredProp(root.Name) or isShopOrDisplayProp(root) or isMapProp(root) then return nil, nil end
+    local info = getWeaponInfo(root)
+    if not info and root:IsA("Model") then
+        local toolChild = root:FindFirstChildOfClass("Tool")
+        if toolChild then info = getWeaponInfo(toolChild) end
     end
+    if info then return info.Name, RARITY_COLORS[info.Rarity] or Color3.fromRGB(220, 220, 220) end
 
-    local name = obj.Name:lower()
-    
-    if name:find("tile") or name:find("bathroom") or name:find("placeholder") or name:find("pot") 
-        or name:find("hitbox") or name:find("box") or name:find("door") or name:find("wall") 
-        or name:find("fuse") or name:find("shelving") or name:find("mesh") 
-        or name:find("sign") or name:find("zone") or name:find("guncase") or name:find("dummy")
-        or name:find("storage") or name:find("safe") or name:find("crate") or name:find("gunsmith")
-        or name == "part" or name == "model" or name == "terrain" or name == "baseplate" 
-        or name == "humanoidrootpart" or name == "head" or name == "torso" then
-        return false
+    local attrName = root:GetAttribute("DisplayName") or root:GetAttribute("Name")
+    local rarity = root:GetAttribute("RarityName") or root:GetAttribute("Rarity") or "Common"
+    if attrName and not isIgnoredProp(attrName) then
+        return attrName, RARITY_COLORS[rarity] or Color3.fromRGB(220, 220, 220)
     end
-
-    local isTargetItem = name:find("glock") or name:find("ammo") or name:find("shotgun") or name:find("rifle") or name:find("pistol") or name:find("buckshot")
-    if not isTargetItem and not obj:IsA("Tool") then
-        return false
+    if root:IsA("Tool") and not isIgnoredProp(root.Name) then
+        return root.Name, RARITY_COLORS[rarity] or Color3.fromRGB(220, 220, 220)
     end
-
-    local ancestor = obj.Parent
-    while ancestor and ancestor ~= workspace do
-        local anName = ancestor.Name:lower()
-        if anName:find("shelf") or anName:find("showcase") or anName:find("display") or anName:find("counter") 
-            or anName:find("rack") or anName:find("cabinet") or anName:find("case") or anName:find("stand") 
-            or anName:find("store") or anName:find("shop") or anName:find("furniture") or anName:find("glass") then
-            return false
-        end
-        ancestor = ancestor.Parent
-    end
-
-    return true
+    return nil, nil
 end
 
-local function createGroundItemTag(obj)
-    if TrackedGroundItems[obj] then return end
-
-    local targetPart = getTargetPartForGroundItem(obj)
+local function processPotentialGroundItem(obj)
+    local root = getGroundItemRoot(obj)
+    if not root or TrackedGroundItems[root] or isCharacterOrPlayer(root) then return end
+    local targetPart = getTargetPartForGroundItem(root)
     if not targetPart then return end
+    local displayName, color = getGroundItemDetails(root)
+    if not displayName then return end
 
     local billboard = Instance.new("BillboardGui")
-    billboard.Name = "ItemTag"
-    billboard.Size = UDim2.new(0, 112, 0, 24)
+    billboard.Name = "ItemTag_" .. displayName
+    billboard.Size = UDim2.new(0, 140, 0, 26)
     billboard.StudsOffset = Vector3.new(0, 1.5, 0)
     billboard.AlwaysOnTop = true
     billboard.Adornee = targetPart
@@ -1131,56 +1328,49 @@ local function createGroundItemTag(obj)
     local textLabel = Instance.new("TextLabel")
     textLabel.Size = UDim2.new(1, 0, 1, 0)
     textLabel.BackgroundTransparency = 1
-    textLabel.TextScaled = true
+    textLabel.TextSize = 13
     textLabel.Font = Enum.Font.GothamBold
-
-    local displayName, color = getGroundItemInfo(obj)
-
     textLabel.Text = displayName
     textLabel.TextColor3 = color
     textLabel.TextStrokeTransparency = 0
     textLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
     textLabel.Parent = billboard
 
-    TrackedGroundItems[obj] = billboard
+    TrackedGroundItems[root] = billboard
 
-    obj.AncestryChanged:Connect(function(_, parent)
-        if not parent or not parent:IsDescendantOf(workspace) then
-            if TrackedGroundItems[obj] then
-                TrackedGroundItems[obj]:Destroy()
-                TrackedGroundItems[obj] = nil
+    local conn
+    conn = root.AncestryChanged:Connect(function(_, parent)
+        if not parent or not parent:IsDescendantOf(workspace) or isCharacterOrPlayer(root) then
+            if TrackedGroundItems[root] then
+                TrackedGroundItems[root]:Destroy()
+                TrackedGroundItems[root] = nil
             end
+            if conn then conn:Disconnect() end
         end
     end)
 end
 
 for _, obj in ipairs(workspace:GetDescendants()) do
     pcall(function()
-        if isAllowedGroundItem(obj) then
-            createGroundItemTag(obj)
-        end
+        if obj:IsA("Tool") or obj:IsA("Model") then processPotentialGroundItem(obj) end
     end)
 end
 
 workspace.DescendantAdded:Connect(function(obj)
     task.wait(0.1)
     pcall(function()
-        if isAllowedGroundItem(obj) then
-            createGroundItemTag(obj)
-        end
+        if obj:IsA("Tool") or obj:IsA("Model") or obj.Name == "Handle" then processPotentialGroundItem(obj) end
     end)
 end)
 
 createSwitch(ESPPage, "Show Ground Items (Pure ESP)", Config.ESP_GroundItem, function(v)
     Config.ESP_GroundItem = v
     GroundItemScreenGui.Enabled = v
-    for _, tag in pairs(TrackedGroundItems) do
-        if tag then tag.Enabled = v end
-    end
+    for _, tag in pairs(TrackedGroundItems) do if tag then tag.Enabled = v end end
 end)
 
 ------------------------------------------------------------------
--- 5. Main Loop, Metatable Hooks & Input
+-- Main Loop, Metatable Hooks & Input
 ------------------------------------------------------------------
 local CurrentAimTarget = nil
 local CurrentAimHead = nil
@@ -1192,7 +1382,6 @@ if rawMeta and setreadonly then
     local oldNamecall = rawMeta.__namecall
     rawMeta.__namecall = newcclosure(function(self, ...)
         local method = getnamecallmethod()
-
         if Config.InfiniteStamina and (method == "FireServer" or method == "InvokeServer") then
             local name = tostring(self.Name):lower()
             if name:find("stamina") or name:find("drain") or name:find("deplete") or name:find("energy") or name:find("sprint") then
@@ -1223,7 +1412,6 @@ if rawMeta and setreadonly then
                 end
             end
         end
-
         return oldNamecall(self, ...)
     end)
 
@@ -1248,9 +1436,7 @@ RunService.RenderStepped:Connect(function(deltaTime)
         currentFPS = math.floor(currentFPS * 0.9 + instantFPS * 0.1 + 0.5)
     end
 
-    pcall(function()
-        currentPing = math.floor(NetworkStats:GetValue() + 0.5)
-    end)
+    pcall(function() currentPing = math.floor(NetworkStats:GetValue() + 0.5) end)
 
     local pingColor = "#2ECC71"
     if currentPing > 300 then pingColor = "#FF4D4D"
@@ -1258,14 +1444,14 @@ RunService.RenderStepped:Connect(function(deltaTime)
 
     StatsLabel.Text = string.format(" FPS: %3d | Ping: <font color=\"%s\">%3dms</font>", currentFPS, pingColor, currentPing)
 
-    if Config.Aimbot then
-        AimbotStatusLabel.Text = ' Aimbot: <font color="#2ECC71">ON</font>'
-    else
-        AimbotStatusLabel.Text = ' Aimbot: <font color="#FF4D4D">OFF</font>'
-    end
+    if Config.Aimbot then AimbotStatusLabel.Text = ' Aimbot: <font color="#2ECC71">ON</font>'
+    else AimbotStatusLabel.Text = ' Aimbot: <font color="#FF4D4D">OFF</font>' end
+
+    local currentPlayers = #Players:GetPlayers()
+    local maxPlayers = Players.MaxPlayers
+    PlayerCountLabel.Text = string.format(' 👥 Players: <font color="#38BDF8"><b>%d/%d</b></font>', currentPlayers, maxPlayers)
 
     local centerPos = getScreenCenter()
-    
     FOVCircle.Position = centerPos
     FOVCircle.Radius = Config.FOV
     FOVCircle.Visible = Config.ShowFOV and (Config.SilentAim or Config.Aimbot)
@@ -1278,11 +1464,8 @@ RunService.RenderStepped:Connect(function(deltaTime)
 
     if Config.Aimbot and IsAiming and CurrentAimHead then
         local targetCFrame = CFrame.new(Camera.CFrame.Position, CurrentAimHead.Position)
-        if Config.AimbotSmoothness >= 100 then
-            Camera.CFrame = targetCFrame
-        else
-            Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, Config.AimbotSmoothness / 100)
-        end
+        if Config.AimbotSmoothness >= 100 then Camera.CFrame = targetCFrame
+        else Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, Config.AimbotSmoothness / 100) end
     end
 
     if Config.SilentAim and Config.RedLineLock then
@@ -1323,7 +1506,7 @@ RunService.RenderStepped:Connect(function(deltaTime)
                     local name = child.Name:lower()
                     if name:find("stamina") or name:find("energy") or name:find("sprint") then
                         if child:IsA("NumberValue") or child:IsA("IntValue") then
-                            local maxVal = targetObject:FindFirstChild("Max" .. child.Name) or targetObject:FindFirstChild(child.Name .. "Max")
+                            local maxVal = targetObject:FindFirstChild("Max" + child.Name) or targetObject:FindFirstChild(child.Name + "Max")
                             child.Value = maxVal and maxVal.Value or 130
                         end
                     end
@@ -1345,25 +1528,21 @@ end)
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if not gameProcessed then
         if input.UserInputType == Enum.UserInputType.Keyboard then
-            if input.KeyCode == Config.ToggleKey then
-                MainFrame.Visible = not MainFrame.Visible
+            if input.KeyCode == Config.ToggleKey then MainFrame.Visible = not MainFrame.Visible
             elseif input.KeyCode == Config.AimbotToggleKey then
                 Config.Aimbot = not Config.Aimbot
-                if aimbotSwitch then
-                    aimbotSwitch.SetState(Config.Aimbot)
-                end
+                if aimbotSwitch then aimbotSwitch.SetState(Config.Aimbot) end
                 SaveConfig()
-            end
+            elseif input.KeyCode == Config.ServerHopMassKey then ServerHopFiltered("mass")
+            elseif input.KeyCode == Config.ServerHopSmallKey then ServerHopFiltered("small")
+            elseif input.KeyCode == Config.QuickExitKey then QuickExit()
+            elseif input.KeyCode == Config.QuickRebirthKey then TriggerRebirth()
+            elseif input.KeyCode == Config.RejoinKey then RejoinServer() end
         end
-        
-        if input.UserInputType == Config.AimbotKey or input.KeyCode == Config.AimbotKey then
-            IsAiming = true
-        end
+        if input.UserInputType == Config.AimbotKey or input.KeyCode == Config.AimbotKey then IsAiming = true end
     end
 end)
 
 UserInputService.InputEnded:Connect(function(input, gameProcessed)
-    if input.UserInputType == Config.AimbotKey or input.KeyCode == Config.AimbotKey then
-        IsAiming = false
-    end
+    if input.UserInputType == Config.AimbotKey or input.KeyCode == Config.AimbotKey then IsAiming = false end
 end)
