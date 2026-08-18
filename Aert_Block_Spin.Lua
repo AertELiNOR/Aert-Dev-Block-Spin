@@ -1,5 +1,5 @@
 -- =========================================================
--- Aert-Dev | Block Spin Script (Fixed TransportService Error)
+-- Aert-Dev | Block Spin Script (Updated Selector for Mass Hop)
 -- =========================================================
 
 local Players = game:GetService("Players")
@@ -12,7 +12,7 @@ local NetworkStats = Stats.Network.ServerStatsItem["Data Ping"]
 local HttpService = game:GetService("HttpService")
 local CoreGui = game:GetService("CoreGui")
 local TeleportService = game:GetService("TeleportService")
-local VirtualInputManager = game:GetService("VirtualInputManager") -- เพิ่มบริการจำลองการกดปุ่ม
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
@@ -47,12 +47,15 @@ local Config = {
     GodMode = false,
     NoFallDamage = false,
     
-    QuickRebirthKey = Enum.KeyCode.K,
+    QuickRebirthKey = Enum.KeyCode.KeypadMinus,
     QuickExitKey = Enum.KeyCode.L,
     RejoinKey = Enum.KeyCode.R,
-    ToggleKey = Enum.KeyCode.RightControl,
+    ToggleKey = Enum.KeyCode.G,
     ServerHopMassKey = Enum.KeyCode.H,
-    ServerHopSmallKey = Enum.KeyCode.KeypadPlus
+    ServerHopSmallKey = Enum.KeyCode.KeypadPlus,
+
+    TargetServerType = "Server Plus", -- Default Mass Hop Target: Server 1, Server 2, Server Plus
+    MaxPingThreshold = 200 -- กรอง ปิง < 200ms
 }
 
 -- Config Save & Load System
@@ -101,7 +104,7 @@ end
 LoadConfig()
 
 ------------------------------------------------------------------
--- Quick Exit, Rebirth & Rejoin Functions (Macro Sequences)
+-- Quick Exit, Rebirth & Rejoin Functions
 ------------------------------------------------------------------
 local function sendKeySequence(keys)
     for _, keyCode in ipairs(keys) do
@@ -112,9 +115,7 @@ local function sendKeySequence(keys)
     end
 end
 
--- Quick Exit: ESC > L > Enter
 local function QuickExit()
-    print("[Aert-Dev] Executing Quick Exit Macro...")
     sendKeySequence({
         Enum.KeyCode.Escape,
         Enum.KeyCode.L,
@@ -122,9 +123,7 @@ local function QuickExit()
     })
 end
 
--- Quick Rebirth: ESC > R > Enter
 local function TriggerRebirth()
-    print("[Aert-Dev] Executing Quick Rebirth Macro...")
     sendKeySequence({
         Enum.KeyCode.Escape,
         Enum.KeyCode.R,
@@ -145,11 +144,29 @@ local function RejoinServer()
 end
 
 ------------------------------------------------------------------
--- Server Hop Logic (Strict Filter for Small & Ping < 270 for Mass)
+-- Server Type Detection & Multi-Type Server Hop Logic
 ------------------------------------------------------------------
-local function FetchServers(cursor, sortOrder)
+local ServerStatusLabel = nil
+
+local function DetectServerType()
+    local typeAttr = workspace:GetAttribute("ServerType") or workspace:GetAttribute("Server") or ReplicatedStorage:GetAttribute("ServerType")
+    if typeAttr then return tostring(typeAttr) end
+
+    local valObj = ReplicatedStorage:FindFirstChild("ServerType") or workspace:FindFirstChild("ServerType")
+    if valObj and valObj:IsA("StringValue") then return valObj.Value end
+
+    if Players.MaxPlayers >= 25 then
+        return "Server Plus"
+    elseif Players.MaxPlayers == 20 then
+        return "Server 2"
+    else
+        return "Server 1"
+    end
+end
+
+local function FetchServers(targetPlaceId, cursor, sortOrder)
     sortOrder = sortOrder or "Desc"
-    local url = string.format("https://games.roblox.com/v1/games/%s/servers/0?sortOrder=%s&limit=100%s", tostring(game.PlaceId), sortOrder, cursor and ("&cursor=" .. cursor) or "")
+    local url = string.format("https://games.roblox.com/v1/games/%s/servers/0?sortOrder=%s&limit=100%s", tostring(targetPlaceId), sortOrder, cursor and ("&cursor=" .. cursor) or "")
     local success, result = pcall(function()
         return HttpService:JSONDecode(game:HttpGet(url))
     end)
@@ -159,29 +176,45 @@ local function FetchServers(cursor, sortOrder)
     return nil
 end
 
-local function ServerHopFiltered(mode)
-    local placeId = game.PlaceId
+local function ServerHopFiltered(targetType)
+    targetType = targetType or Config.TargetServerType
+    local targetPlaceId = game.PlaceId
     local currentJobId = game.JobId
     local validServers = {}
     local cursor = nil
     local pagesChecked = 0
-    local sortOrder = (mode == "small") and "Asc" or "Desc"
+    local sortOrder = (targetType == "Small") and "Asc" or "Desc"
+
+    if ServerStatusLabel then
+        ServerStatusLabel.Text = string.format(' Server: <font color="#FBBF24">Searching %s...</font>', targetType)
+    end
 
     repeat
         pagesChecked = pagesChecked + 1
-        local res = FetchServers(cursor, sortOrder)
+        local res = FetchServers(targetPlaceId, cursor, sortOrder)
         if res and res.data then
             for _, server in ipairs(res.data) do
                 if type(server) == "table" and server.id ~= currentJobId and server.playing < server.maxPlayers then
-                    if mode == "mass" then
-                        local ping = server.ping or 150
-                        if server.playing > 10 and ping < 270 then
-                            table.insert(validServers, server.id)
-                        end
-                    elseif mode == "small" then
-                        if server.playing <= 10 and server.playing > 0 then
-                            table.insert(validServers, server.id)
-                        end
+                    local ping = server.ping or 100
+                    local maxP = server.maxPlayers or 20
+                    local isMatch = false
+
+                    -- แยกประเภท Server ตาม MaxPlayers
+                    if targetType == "Server Plus" then
+                        isMatch = (maxP >= 25) and (server.playing >= 8)
+                    elseif targetType == "Server 2" then
+                        isMatch = (maxP == 20) and (server.playing >= 6)
+                    elseif targetType == "Server 1" then
+                        isMatch = (maxP <= 18) and (server.playing >= 4)
+                    elseif targetType == "Small" then
+                        isMatch = (server.playing <= 10 and server.playing > 0)
+                    else
+                        isMatch = (server.playing >= 8)
+                    end
+
+                    -- กรองเงื่อนไข Ping < 200ms
+                    if isMatch and ping < Config.MaxPingThreshold then
+                        table.insert(validServers, server)
                     end
                 end
             end
@@ -189,13 +222,19 @@ local function ServerHopFiltered(mode)
         else
             break
         end
-    until not cursor or #validServers >= 15 or pagesChecked >= 5
+    until not cursor or #validServers >= 15 or pagesChecked >= 6
 
     if #validServers > 0 then
-        local targetJobId = validServers[math.random(1, #validServers)]
-        TeleportService:TeleportToPlaceInstance(placeId, targetJobId, LocalPlayer)
+        local targetServer = validServers[math.random(1, #validServers)]
+        if ServerStatusLabel then
+            ServerStatusLabel.Text = string.format(' Server: <font color="#38BDF8">Hopping -> %s</font>', targetType)
+        end
+        task.wait(0.2)
+        TeleportService:TeleportToPlaceInstance(targetPlaceId, targetServer.id, LocalPlayer)
     else
-        TeleportService:Teleport(placeId, LocalPlayer)
+        if ServerStatusLabel then
+            ServerStatusLabel.Text = ' Server: <font color="#FF4D4D">No Ping <200 Server</font>'
+        end
     end
 end
 
@@ -414,7 +453,7 @@ else ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 -- Floating Toggle Button
 local FloatingToggle = Instance.new("TextButton")
 FloatingToggle.Size = UDim2.new(0, 110, 0, 38)
-FloatingToggle.Position = UDim2.new(0, 25, 0.5, -19)
+FloatingToggle.Position = UDim2.new(0, 10, 0.5, -19)
 FloatingToggle.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
 FloatingToggle.Text = "Aert-Dev"
 FloatingToggle.TextColor3 = Color3.fromRGB(240, 240, 250)
@@ -433,74 +472,57 @@ FTStroke.Color = Color3.fromRGB(99, 102, 241)
 FTStroke.Thickness = 1.5
 FTStroke.Parent = FloatingToggle
 
--- FPS & Ping Label
-local StatsLabel = Instance.new("TextLabel")
-StatsLabel.Size = UDim2.new(0, 210, 0, 28)
-StatsLabel.Position = UDim2.new(0, 145, 0, 15)
-StatsLabel.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-StatsLabel.BackgroundTransparency = 0.2
-StatsLabel.TextColor3 = Color3.fromRGB(240, 240, 245)
-StatsLabel.Font = Enum.Font.Code
-StatsLabel.TextSize = 12
-StatsLabel.RichText = true
-StatsLabel.Text = " FPS:  60 | Ping:   0ms"
-StatsLabel.TextXAlignment = Enum.TextXAlignment.Left
-StatsLabel.Parent = ScreenGui
+------------------------------------------------------------------
+-- HUD Overlay System (ชิดขอบจอซ้าย) & FPS (มุมขวาบนสุด)
+------------------------------------------------------------------
+local function createHUDLabel(posY, defaultText)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0, 180, 0, 26)
+    label.Position = UDim2.new(0, 10, 0, posY)
+    label.BackgroundColor3 = Color3.fromRGB(14, 14, 20)
+    label.BackgroundTransparency = 0.25
+    label.TextColor3 = Color3.fromRGB(240, 240, 245)
+    label.Font = Enum.Font.GothamMedium
+    label.TextSize = 12
+    label.RichText = true
+    label.Text = "  " .. defaultText
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = ScreenGui
 
-local StatsCorner = Instance.new("UICorner")
-StatsCorner.CornerRadius = UDim.new(0, 8)
-StatsCorner.Parent = StatsLabel
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = label
 
-local StatsStroke = Instance.new("UIStroke")
-StatsStroke.Color = Color3.fromRGB(45, 45, 60)
-StatsStroke.Thickness = 1
-StatsStroke.Parent = StatsLabel
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(35, 35, 50)
+    stroke.Thickness = 1
+    stroke.Parent = label
 
--- Aimbot Status Label
-local AimbotStatusLabel = Instance.new("TextLabel")
-AimbotStatusLabel.Size = UDim2.new(0, 210, 0, 28)
-AimbotStatusLabel.Position = UDim2.new(0, 145, 0, 50)
-AimbotStatusLabel.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-AimbotStatusLabel.BackgroundTransparency = 0.2
-AimbotStatusLabel.TextColor3 = Color3.fromRGB(240, 240, 245)
-AimbotStatusLabel.Font = Enum.Font.Code
-AimbotStatusLabel.TextSize = 12
-AimbotStatusLabel.RichText = true
-AimbotStatusLabel.Text = ' Aimbot: <font color="#FF4D4D">OFF</font>'
-AimbotStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-AimbotStatusLabel.Parent = ScreenGui
+    return label
+end
 
-local ASCorner = Instance.new("UICorner")
-ASCorner.CornerRadius = UDim.new(0, 8)
-ASCorner.Parent = AimbotStatusLabel
+local StatsLabel = createHUDLabel(15, "Ping: 0ms")
+local AimbotStatusLabel = createHUDLabel(46, 'Aimbot: <font color="#FF4D4D">OFF</font>')
+local PlayerCountLabel = createHUDLabel(77, 'Players: <font color="#38BDF8">0/0</font>')
+ServerStatusLabel = createHUDLabel(108, string.format('Server: <font color="#818CF8">%s</font>', DetectServerType()))
 
-local ASStroke = Instance.new("UIStroke")
-ASStroke.Color = Color3.fromRGB(45, 45, 60)
-ASStroke.Thickness = 1
-ASStroke.Parent = AimbotStatusLabel
+local TopRightFPS = Instance.new("TextLabel")
+TopRightFPS.Name = "TopRightFPS"
+TopRightFPS.Parent = ScreenGui
+TopRightFPS.Size = UDim2.new(0, 150, 0, 28)
+TopRightFPS.Position = UDim2.new(1, -20, 0, 10)
+TopRightFPS.AnchorPoint = Vector2.new(1, 0)
+TopRightFPS.BackgroundTransparency = 1
+TopRightFPS.Font = Enum.Font.GothamBold
+TopRightFPS.TextSize = 22
+TopRightFPS.TextColor3 = Color3.fromRGB(85, 255, 85)
+TopRightFPS.TextXAlignment = Enum.TextXAlignment.Right
+TopRightFPS.Text = "60 FPS"
 
--- Player Count Label (Enhanced & Made More Prominent)
-local PlayerCountLabel = Instance.new("TextLabel")
-PlayerCountLabel.Size = UDim2.new(0, 210, 0, 32)
-PlayerCountLabel.Position = UDim2.new(0, 145, 0, 85)
-PlayerCountLabel.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
-PlayerCountLabel.BackgroundTransparency = 0.15
-PlayerCountLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-PlayerCountLabel.Font = Enum.Font.GothamBold
-PlayerCountLabel.TextSize = 13
-PlayerCountLabel.RichText = true
-PlayerCountLabel.Text = ' 👥 Players: <font color="#38BDF8"><b>0/0</b></font>'
-PlayerCountLabel.TextXAlignment = Enum.TextXAlignment.Left
-PlayerCountLabel.Parent = ScreenGui
-
-local PCCorner = Instance.new("UICorner")
-PCCorner.CornerRadius = UDim.new(0, 8)
-PCCorner.Parent = PlayerCountLabel
-
-local PCStroke = Instance.new("UIStroke")
-PCStroke.Color = Color3.fromRGB(99, 102, 241)
-PCStroke.Thickness = 1.5
-PCStroke.Parent = PlayerCountLabel
+local fpsStroke = Instance.new("UIStroke")
+fpsStroke.Thickness = 2
+fpsStroke.Color = Color3.fromRGB(0, 0, 0)
+fpsStroke.Parent = TopRightFPS
 
 -- Main UI Frame
 local MainFrame = Instance.new("Frame")
@@ -832,8 +854,8 @@ local function createKeybind(page, text, defaultKey, callback)
     label.Parent = frame
 
     local bindBtn = Instance.new("TextButton")
-    bindBtn.Size = UDim2.new(0, 100, 0, 28)
-    bindBtn.Position = UDim2.new(1, -112, 0.5, -14)
+    bindBtn.Size = UDim2.new(0, 110, 0, 28)
+    bindBtn.Position = UDim2.new(1, -122, 0.5, -14)
     bindBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
     bindBtn.Text = typeof(defaultKey) == "EnumItem" and defaultKey.Name or tostring(defaultKey)
     bindBtn.TextColor3 = Color3.fromRGB(235, 235, 240)
@@ -865,6 +887,57 @@ local function createKeybind(page, text, defaultKey, callback)
                 SaveConfig()
             end
         end
+    end)
+end
+
+-- เพิ่มระบบ Selector ให้เลือกประเภท Server สำหรับ Mass Hop
+local function createSelector(page, text, options, defaultOption, callback)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, -10, 0, 42)
+    frame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+    frame.Parent = page
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = frame
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0.55, 0, 1, 0)
+    label.Position = UDim2.new(0, 14, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = text
+    label.TextColor3 = Color3.fromRGB(235, 235, 240)
+    label.Font = Enum.Font.GothamMedium
+    label.TextSize = 13
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = frame
+
+    local selectBtn = Instance.new("TextButton")
+    selectBtn.Size = UDim2.new(0, 130, 0, 28)
+    selectBtn.Position = UDim2.new(1, -142, 0.5, -14)
+    selectBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+    selectBtn.Text = tostring(defaultOption)
+    selectBtn.TextColor3 = Color3.fromRGB(99, 102, 241)
+    selectBtn.Font = Enum.Font.GothamBold
+    selectBtn.TextSize = 12
+    selectBtn.Parent = frame
+
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 6)
+    btnCorner.Parent = selectBtn
+
+    local currentIndex = 1
+    for i, opt in ipairs(options) do
+        if opt == defaultOption then currentIndex = i break end
+    end
+
+    selectBtn.MouseButton1Click:Connect(function()
+        currentIndex = currentIndex + 1
+        if currentIndex > #options then currentIndex = 1 end
+        local selected = options[currentIndex]
+        selectBtn.Text = selected
+        callback(selected)
+        SaveConfig()
     end)
 end
 
@@ -908,18 +981,34 @@ createKeybind(MiscPage, "Quick Exit Keybind", Config.QuickExitKey, function(newK
 createButton(MiscPage, "Quick Rebirth Now (ESC > R > Enter)", function() TriggerRebirth() end)
 createKeybind(MiscPage, "Quick Rebirth Keybind", Config.QuickRebirthKey, function(newKey) Config.QuickRebirthKey = newKey end)
 
-createSectionTitle(MiscPage, "SETTINGS & UTILITIES")
+createSectionTitle(MiscPage, "SERVER HOPPING (PING < 200ms)")
 createKeybind(MiscPage, "Toggle Menu Keybind", Config.ToggleKey, function(newKey) Config.ToggleKey = newKey end)
 
-createButton(MiscPage, "Server Hop Mass (>10 Players, Ping < 270)", function(btn)
-    btn.Text = "Hopping Mass Server..."
-    ServerHopFiltered("mass")
+createButton(MiscPage, "Hop to Server 1 (Ping < 200)", function(btn)
+    btn.Text = "Hopping to Server 1..."
+    ServerHopFiltered("Server 1")
 end)
+
+createButton(MiscPage, "Hop to Server 2 (Ping < 200)", function(btn)
+    btn.Text = "Hopping to Server 2..."
+    ServerHopFiltered("Server 2")
+end)
+
+createButton(MiscPage, "Hop to Server Plus (Ping < 200)", function(btn)
+    btn.Text = "Hopping to Server Plus..."
+    ServerHopFiltered("Server Plus")
+end)
+
+-- Selector สำหรับเลือกประเภท Server ที่ปุ่ม Keybind (H) จะย้ายไป
+createSelector(MiscPage, "Target Mass Hop Type", {"Server 1", "Server 2", "Server Plus"}, Config.TargetServerType, function(selected)
+    Config.TargetServerType = selected
+end)
+
 createKeybind(MiscPage, "Server Hop Mass Keybind", Config.ServerHopMassKey, function(newKey) Config.ServerHopMassKey = newKey end)
 
 createButton(MiscPage, "Server Hop Small (<=10 Players)", function(btn)
     btn.Text = "Hopping Small Server..."
-    ServerHopFiltered("small")
+    ServerHopFiltered("Small")
 end)
 createKeybind(MiscPage, "Server Hop Small Keybind", Config.ServerHopSmallKey, function(newKey) Config.ServerHopSmallKey = newKey end)
 
@@ -1431,6 +1520,8 @@ local currentFPS = 60
 local currentPing = 0
 
 RunService.RenderStepped:Connect(function(deltaTime)
+    Camera = workspace.CurrentCamera or Camera
+
     if deltaTime > 0 then
         local instantFPS = 1 / deltaTime
         currentFPS = math.floor(currentFPS * 0.9 + instantFPS * 0.1 + 0.5)
@@ -1439,17 +1530,26 @@ RunService.RenderStepped:Connect(function(deltaTime)
     pcall(function() currentPing = math.floor(NetworkStats:GetValue() + 0.5) end)
 
     local pingColor = "#2ECC71"
-    if currentPing > 300 then pingColor = "#FF4D4D"
+    if currentPing > 200 then pingColor = "#FF4D4D"
     elseif currentPing > 100 then pingColor = "#FF9F43" end
 
-    StatsLabel.Text = string.format(" FPS: %3d | Ping: <font color=\"%s\">%3dms</font>", currentFPS, pingColor, currentPing)
+    StatsLabel.Text = string.format(" Ping: <font color=\"%s\">%dms</font>", pingColor, currentPing)
+    TopRightFPS.Text = string.format("%d FPS", currentFPS)
 
-    if Config.Aimbot then AimbotStatusLabel.Text = ' Aimbot: <font color="#2ECC71">ON</font>'
-    else AimbotStatusLabel.Text = ' Aimbot: <font color="#FF4D4D">OFF</font>' end
+    if Config.Aimbot then 
+        AimbotStatusLabel.Text = ' Aimbot: <font color="#2ECC71"><b>ON</b></font>'
+    else 
+        AimbotStatusLabel.Text = ' Aimbot: <font color="#FF4D4D"><b>OFF</b></font>' 
+    end
 
     local currentPlayers = #Players:GetPlayers()
     local maxPlayers = Players.MaxPlayers
-    PlayerCountLabel.Text = string.format(' 👥 Players: <font color="#38BDF8"><b>%d/%d</b></font>', currentPlayers, maxPlayers)
+    PlayerCountLabel.Text = string.format(' Players: <font color="#38BDF8"><b>%d/%d</b></font>', currentPlayers, maxPlayers)
+
+    if ServerStatusLabel and not ServerStatusLabel.Text:find("Hopping") and not ServerStatusLabel.Text:find("Searching") then
+        local serverType = DetectServerType()
+        ServerStatusLabel.Text = string.format(' Server: <font color="#818CF8"><b>%s</b></font>', serverType)
+    end
 
     local centerPos = getScreenCenter()
     FOVCircle.Position = centerPos
@@ -1506,7 +1606,7 @@ RunService.RenderStepped:Connect(function(deltaTime)
                     local name = child.Name:lower()
                     if name:find("stamina") or name:find("energy") or name:find("sprint") then
                         if child:IsA("NumberValue") or child:IsA("IntValue") then
-                            local maxVal = targetObject:FindFirstChild("Max" + child.Name) or targetObject:FindFirstChild(child.Name + "Max")
+                            local maxVal = targetObject:FindFirstChild("Max" .. child.Name) or targetObject:FindFirstChild(child.Name .. "Max")
                             child.Value = maxVal and maxVal.Value or 130
                         end
                     end
@@ -1533,8 +1633,8 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
                 Config.Aimbot = not Config.Aimbot
                 if aimbotSwitch then aimbotSwitch.SetState(Config.Aimbot) end
                 SaveConfig()
-            elseif input.KeyCode == Config.ServerHopMassKey then ServerHopFiltered("mass")
-            elseif input.KeyCode == Config.ServerHopSmallKey then ServerHopFiltered("small")
+            elseif input.KeyCode == Config.ServerHopMassKey then ServerHopFiltered(Config.TargetServerType)
+            elseif input.KeyCode == Config.ServerHopSmallKey then ServerHopFiltered("Small")
             elseif input.KeyCode == Config.QuickExitKey then QuickExit()
             elseif input.KeyCode == Config.QuickRebirthKey then TriggerRebirth()
             elseif input.KeyCode == Config.RejoinKey then RejoinServer() end
