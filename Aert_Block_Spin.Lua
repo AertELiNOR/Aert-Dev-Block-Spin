@@ -1,5 +1,6 @@
 -- =========================================================
 -- Aert-Dev | Block Spin Script (Updated Selector for Mass Hop)
+-- + Updated Unlimited Stamina / Energy Bypass
 -- =========================================================
 
 local Players = game:GetService("Players")
@@ -1465,6 +1466,7 @@ local CurrentAimTarget = nil
 local CurrentAimHead = nil
 local IsAiming = false
 
+-- [ UPDATED STAMINA SYSTEM - HOOKS ] --
 local rawMeta = getrawmetatable and getrawmetatable(game)
 if rawMeta and setreadonly then
     setreadonly(rawMeta, false)
@@ -1506,10 +1508,24 @@ if rawMeta and setreadonly then
 
     local oldIndex = rawMeta.__index
     rawMeta.__index = newcclosure(function(self, idx)
-        if Config.SilentAim and not checkcaller() and self == Mouse then
-            if CurrentAimTarget and CurrentAimHead then
-                if idx == "Hit" then return CurrentAimHead.CFrame
-                elseif idx == "Target" then return CurrentAimHead end
+        if not checkcaller() then
+            -- เพิ่มการดักหลอกค่า (Spoofing) สำหรับระบบ Stamina
+            if Config.InfiniteStamina then
+                local prop = tostring(idx)
+                if prop == "Value" and typeof(self) == "Instance" and (self:IsA("NumberValue") or self:IsA("IntValue")) then
+                    local name = self.Name:lower()
+                    if name:find("stamina") or name:find("energy") or name:find("dash") or name:find("sprint") then
+                        return 130 -- สามารถปรับเป็นเลข Max Stamina ของคุณได้
+                    end
+                end
+            end
+
+            -- ระบบ Silent Aim เดิม
+            if Config.SilentAim and self == Mouse then
+                if CurrentAimTarget and CurrentAimHead then
+                    if idx == "Hit" then return CurrentAimHead.CFrame
+                    elseif idx == "Target" then return CurrentAimHead end
+                end
             end
         end
         return oldIndex(self, idx)
@@ -1599,28 +1615,33 @@ RunService.RenderStepped:Connect(function(deltaTime)
         if hum and Config.GodMode then hum.Health = hum.MaxHealth end
         if hum and Config.NoFallDamage then hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false) end
 
+        -- [ UPDATED STAMINA SYSTEM - LOOP ] --
         if Config.InfiniteStamina then
+            local MAX_STAMINA = 130
             local function maxOutStamina(targetObject)
                 if not targetObject then return end
-                for _, child in pairs(targetObject:GetChildren()) do
+                
+                -- เปลี่ยนจาก GetChildren() เป็น GetDescendants() เพื่อค้นหาให้ลึกขึ้น
+                for _, child in pairs(targetObject:GetDescendants()) do
                     local name = child.Name:lower()
-                    if name:find("stamina") or name:find("energy") or name:find("sprint") then
+                    if name:find("stamina") or name:find("energy") or name:find("sprint") or name:find("dash") then
                         if child:IsA("NumberValue") or child:IsA("IntValue") then
-                            local maxVal = targetObject:FindFirstChild("Max" .. child.Name) or targetObject:FindFirstChild(child.Name .. "Max")
-                            child.Value = maxVal and maxVal.Value or 130
+                            local maxVal = targetObject:FindFirstChild("Max" .. child.Name, true) or targetObject:FindFirstChild(child.Name .. "Max", true)
+                            child.Value = maxVal and maxVal.Value or MAX_STAMINA
                         end
                     end
                 end
+                
                 for attrName, attrValue in pairs(targetObject:GetAttributes()) do
                     local name = attrName:lower()
-                    if (name:find("stamina") or name:find("energy") or name:find("sprint")) and type(attrValue) == "number" then
-                        targetObject:SetAttribute(attrName, 130)
+                    if (name:find("stamina") or name:find("energy") or name:find("sprint") or name:find("dash")) and type(attrValue) == "number" then
+                        targetObject:SetAttribute(attrName, MAX_STAMINA)
                     end
                 end
             end
             maxOutStamina(char)
             maxOutStamina(LocalPlayer)
-            maxOutStamina(hum)
+            if hum then maxOutStamina(hum) end
         end
     end
 end)
