@@ -1,5 +1,5 @@
 -- =========================================================
--- Aert-Dev | Block Spin Script (Added Snap Down Status HUD & Ping Slider)
+-- Aert-Dev | Block Spin Script (Hidden Menu on Startup)
 -- =========================================================
 
 local Players = game:GetService("Players")
@@ -294,7 +294,6 @@ local function ServerHopFiltered(targetType)
         TeleportService:TeleportToPlaceInstance(targetPlaceId, targetServer.id, LocalPlayer)
     else
         if ServerStatusLabel then
-            -- เปลี่ยนข้อความให้แสดงค่า Ping Threshold ปัจจุบัน
             ServerStatusLabel.Text = string.format(' Server: <font color="#FF4D4D">No Ping <%d Server</font>', Config.MaxPingThreshold)
         end
     end
@@ -550,8 +549,6 @@ local StatsLabel = createHUDLabel(15, "Ping: 0ms")
 local AimbotStatusLabel = createHUDLabel(46, 'Aimbot: <font color="#FF4D4D">OFF</font>')
 local PlayerCountLabel = createHUDLabel(77, 'Players: <font color="#38BDF8">0/0</font>')
 ServerStatusLabel = createHUDLabel(108, string.format('Server: <font color="#818CF8">%s</font>', DetectServerType()))
-
--- [ NEW ] เพิ่ม Snap Status Label ไว้ใต้ Server
 local SnapDownStatusLabel = createHUDLabel(139, 'Snap: <font color="#FF4D4D">OFF</font>')
 
 local TopRightFPS = Instance.new("TextLabel")
@@ -579,6 +576,7 @@ MainFrame.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
+MainFrame.Visible = false -- ซ่อนเมนูหลักในครั้งแรกที่รันสคริปต์
 MainFrame.Parent = ScreenGui
 
 FloatingToggle.MouseButton1Click:Connect(function()
@@ -1040,16 +1038,10 @@ createKeybind(MiscPage, "Quick Exit Keybind", Config.QuickExitKey, function(newK
 createButton(MiscPage, "Quick Rebirth Now (ESC > R > Enter)", function() TriggerRebirth() end)
 createKeybind(MiscPage, "Quick Rebirth Keybind", Config.QuickRebirthKey, function(newKey) Config.QuickRebirthKey = newKey end)
 
--- =========================================================================
--- ปรับแก้หมวด SERVER HOPPING ให้สามารถปรับ Ping ได้เอง
--- =========================================================================
 createSectionTitle(MiscPage, "SERVER HOPPING")
-
--- เพิ่ม Slider สำหรับให้ผู้ใช้งานเลื่อนปรับ Max Ping ได้อิสระ
 createSlider(MiscPage, "Max Ping Threshold", 30, 400, Config.MaxPingThreshold, false, function(v)
     Config.MaxPingThreshold = v
 end)
-
 createKeybind(MiscPage, "Toggle Menu Keybind", Config.ToggleKey, function(newKey) Config.ToggleKey = newKey end)
 createButton(MiscPage, "Hop to Server 1", function(btn)
     btn.Text = "Hopping to Server 1..."
@@ -1612,7 +1604,6 @@ RunService.RenderStepped:Connect(function(deltaTime)
         AimbotStatusLabel.Text = ' Aimbot: <font color="#FF4D4D"><b>OFF</b></font>' 
     end
 
-    -- [ NEW ] อัปเดตข้อความบน Snap Down HUD
     if Config.SnapDown then
         SnapDownStatusLabel.Text = ' Snap: <font color="#2ECC71"><b>ON</b></font>'
     else
