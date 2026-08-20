@@ -1,6 +1,5 @@
 -- =========================================================
--- Aert-Dev | Block Spin Script (Updated Selector for Mass Hop)
--- + Updated Unlimited Stamina / Energy Bypass
+-- Aert-Dev | Block Spin Script (Added Snap Down / มุดดิน)
 -- =========================================================
 
 local Players = game:GetService("Players")
@@ -48,6 +47,11 @@ local Config = {
     GodMode = false,
     NoFallDamage = false,
     
+    -- [ NEW ] Snap Down Config
+    SnapDown = false,
+    SnapDownOffset = 20,
+    SnapDownKey = Enum.KeyCode.Z,
+    
     QuickRebirthKey = Enum.KeyCode.KeypadMinus,
     QuickExitKey = Enum.KeyCode.L,
     RejoinKey = Enum.KeyCode.R,
@@ -55,8 +59,8 @@ local Config = {
     ServerHopMassKey = Enum.KeyCode.H,
     ServerHopSmallKey = Enum.KeyCode.KeypadPlus,
 
-    TargetServerType = "Server Plus", -- Default Mass Hop Target: Server 1, Server 2, Server Plus
-    MaxPingThreshold = 170 -- แก้ไขเป็น กรอง ปิง < 170ms
+    TargetServerType = "Server Plus",
+    MaxPingThreshold = 170
 }
 
 -- Config Save & Load System
@@ -85,7 +89,8 @@ local function LoadConfig()
         end)
         if success and type(data) == "table" then
             for k, v in pairs(data) do
-                if (k == "ToggleKey" or k == "AimbotKey" or k == "AimbotToggleKey" or k == "ServerHopMassKey" or k == "ServerHopSmallKey" or k == "QuickExitKey" or k == "QuickRebirthKey" or k == "RejoinKey") and type(v) == "string" then
+                -- Added SnapDownKey to the Enum loader string check
+                if (k == "ToggleKey" or k == "AimbotKey" or k == "AimbotToggleKey" or k == "ServerHopMassKey" or k == "ServerHopSmallKey" or k == "QuickExitKey" or k == "QuickRebirthKey" or k == "RejoinKey" or k == "SnapDownKey") and type(v) == "string" then
                     local successKey, keyEnum = pcall(function() return Enum.KeyCode[v] end)
                     local successMouse, mouseEnum = pcall(function() return Enum.UserInputType[v] end)
                     
@@ -103,6 +108,71 @@ local function LoadConfig()
 end
 
 LoadConfig()
+
+------------------------------------------------------------------
+-- Snap Down (มุดดิน) Core Logic
+------------------------------------------------------------------
+local IsSnappedDown = false
+local SnapOriginalCFrame = nil
+local SnapPlatform = nil
+local SnapDownUI_Toggle = nil -- Reference to UI Switch
+
+local function UpdateSnapDown()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    if Config.SnapDown then
+        -- ถ้าเพิ่งเปิด ให้บันทึกตำแหน่งบนดินเอาไว้
+        if not IsSnappedDown then
+            SnapOriginalCFrame = hrp.CFrame
+            IsSnappedDown = true
+        end
+        
+        -- ปรับตำแหน่งลงใต้ดิน ตามค่า Y Offset
+        if SnapOriginalCFrame then
+            hrp.CFrame = SnapOriginalCFrame * CFrame.new(0, -Config.SnapDownOffset, 0)
+            
+            -- สร้างพื้นล่องหนมารองเท้าไว้กันตก
+            if not SnapPlatform then
+                SnapPlatform = Instance.new("Part")
+                SnapPlatform.Name = "AertDev_SnapPlatform"
+                SnapPlatform.Size = Vector3.new(15, 1, 15)
+                SnapPlatform.Anchored = true
+                SnapPlatform.Transparency = 1
+                SnapPlatform.CanCollide = true
+                SnapPlatform.Parent = workspace
+            end
+            -- ขยับพื้นตามใต้เท้า
+            SnapPlatform.CFrame = hrp.CFrame * CFrame.new(0, -3.5, 0)
+        end
+    else
+        -- ถ้ากดปิด ให้ดึงตัวกลับขึ้นมาที่เดิมและลบพื้น
+        if IsSnappedDown then
+            IsSnappedDown = false
+            if SnapOriginalCFrame then
+                hrp.CFrame = SnapOriginalCFrame
+                SnapOriginalCFrame = nil
+            end
+            if SnapPlatform then
+                SnapPlatform:Destroy()
+                SnapPlatform = nil
+            end
+        end
+    end
+end
+
+-- Reset SnapDown if character dies
+LocalPlayer.CharacterAdded:Connect(function()
+    if Config.SnapDown then
+        Config.SnapDown = false
+        IsSnappedDown = false
+        SnapOriginalCFrame = nil
+        if SnapPlatform then SnapPlatform:Destroy() SnapPlatform = nil end
+        if SnapDownUI_Toggle then SnapDownUI_Toggle.SetState(false) end
+    end
+end)
 
 ------------------------------------------------------------------
 -- Quick Exit, Rebirth & Rejoin Functions
@@ -200,7 +270,6 @@ local function ServerHopFiltered(targetType)
                     local maxP = server.maxPlayers or 20
                     local isMatch = false
 
-                    -- แยกประเภท Server ตาม MaxPlayers
                     if targetType == "Server Plus" then
                         isMatch = (maxP >= 25) and (server.playing >= 8)
                     elseif targetType == "Server 2" then
@@ -213,7 +282,6 @@ local function ServerHopFiltered(targetType)
                         isMatch = (server.playing >= 8)
                     end
 
-                    -- กรองเงื่อนไข Ping < 170ms
                     if isMatch and ping < Config.MaxPingThreshold then
                         table.insert(validServers, server)
                     end
@@ -256,26 +324,17 @@ local RARITY_COLORS = {
 }
 
 local RARITY_RANK = {
-    ["Common"] = 1,
-    ["Uncommon"] = 2,
-    ["Rare"] = 3,
-    ["Epic"] = 4,
-    ["Legendary"] = 5,
-    ["Omega"] = 6
+    ["Common"] = 1, ["Uncommon"] = 2, ["Rare"] = 3, ["Epic"] = 4, ["Legendary"] = 5, ["Omega"] = 6
 }
 
 local IGNORED_PROPS = {
-    "gaspump", "interior", "furniture", "milkshake", "cases", "gunsnammo",
-    "store", "shop", "building", "door", "ladder", "trash", "atm", "vending",
-    "car", "vehicle", "van", "tree", "light", "spawn", "safezone", "baseplate", "terrain",
-    "showcase", "display", "counter", "shelf", "stand", "pipe", "sewer", "sign",
-    "burger", "camera", "pole", "post", "road", "street", "grass", "branch", "leafy",
-    "structure", "model", "wash", "celltower", "silo", "fence"
+    "gaspump", "interior", "furniture", "milkshake", "cases", "gunsnammo", "store", "shop", "building", "door", "ladder", "trash", "atm", "vending",
+    "car", "vehicle", "van", "tree", "light", "spawn", "safezone", "baseplate", "terrain", "showcase", "display", "counter", "shelf", "stand", "pipe", "sewer", "sign",
+    "burger", "camera", "pole", "post", "road", "street", "grass", "branch", "leafy", "structure", "model", "wash", "celltower", "silo", "fence"
 }
 
 local MAP_KEYWORDS = {
-    "map", "building", "environment", "prop", "world", "street", "road",
-    "structure", "decoration", "scenery", "furniture", "store", "shop", "sign",
+    "map", "building", "environment", "prop", "world", "street", "road", "structure", "decoration", "scenery", "furniture", "store", "shop", "sign",
     "pipe", "tree", "plant", "silo", "tower", "camera", "light", "fence", "door"
 }
 
@@ -358,11 +417,7 @@ local function registerItems(folder)
         local rarity = tool:GetAttribute("RarityName") or tool:GetAttribute("Rarity") or "Common"
         
         WeaponDB[key] = {
-            Name = displayName,
-            Rarity = rarity,
-            ImageId = imageId,
-            ToolName = tool.Name,
-            Key = key
+            Name = displayName, Rarity = rarity, ImageId = imageId, ToolName = tool.Name, Key = key
         }
         
         if imageId and imageId ~= "" and not PreloadedImages[imageId] then
@@ -451,7 +506,6 @@ if gethui then ScreenGui.Parent = gethui()
 elseif syn and syn.protect_gui then syn.protect_gui(ScreenGui); ScreenGui.Parent = CoreGui
 else ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
--- Floating Toggle Button
 local FloatingToggle = Instance.new("TextButton")
 FloatingToggle.Size = UDim2.new(0, 110, 0, 38)
 FloatingToggle.Position = UDim2.new(0, 10, 0.5, -19)
@@ -473,9 +527,6 @@ FTStroke.Color = Color3.fromRGB(99, 102, 241)
 FTStroke.Thickness = 1.5
 FTStroke.Parent = FloatingToggle
 
-------------------------------------------------------------------
--- HUD Overlay System (ชิดขอบจอซ้าย) & FPS (มุมขวาบนสุด)
-------------------------------------------------------------------
 local function createHUDLabel(posY, defaultText)
     local label = Instance.new("TextLabel")
     label.Size = UDim2.new(0, 180, 0, 26)
@@ -525,10 +576,9 @@ fpsStroke.Thickness = 2
 fpsStroke.Color = Color3.fromRGB(0, 0, 0)
 fpsStroke.Parent = TopRightFPS
 
--- Main UI Frame
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 580, 0, 400)
-MainFrame.Position = UDim2.new(0.5, -290, 0.5, -200)
+MainFrame.Size = UDim2.new(0, 580, 0, 420) -- ขยายขนาดนิดหน่อยเผื่อเพิ่มปุ่ม
+MainFrame.Position = UDim2.new(0.5, -290, 0.5, -210)
 MainFrame.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -891,7 +941,6 @@ local function createKeybind(page, text, defaultKey, callback)
     end)
 end
 
--- เพิ่มระบบ Selector ให้เลือกประเภท Server สำหรับ Mass Hop
 local function createSelector(page, text, options, defaultOption, callback)
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(1, -10, 0, 42)
@@ -972,41 +1021,48 @@ createSwitch(CharacterPage, "Infinite Stamina", Config.InfiniteStamina, function
 createSwitch(CharacterPage, "God Mode", Config.GodMode, function(v) Config.GodMode = v end)
 createSwitch(CharacterPage, "No Fall Damage", Config.NoFallDamage, function(v) Config.NoFallDamage = v end)
 
+-- [ NEW ] Snap Down UI
+createSectionTitle(CharacterPage, "SNAP DOWN (มุดดิน)")
+SnapDownUI_Toggle = createSwitch(CharacterPage, "Snap down", Config.SnapDown, function(v)
+    Config.SnapDown = v
+    UpdateSnapDown()
+end)
+
+createSlider(CharacterPage, "Y Offset", 5, 100, Config.SnapDownOffset, false, function(v)
+    Config.SnapDownOffset = v
+    if Config.SnapDown then UpdateSnapDown() end
+end)
+
+createKeybind(CharacterPage, "Snap Down Keybind", Config.SnapDownKey, function(newKey) 
+    Config.SnapDownKey = newKey 
+end)
+
 createSectionTitle(MiscPage, "QUICK ACTIONS & REBIRTH")
 createButton(MiscPage, "Rejoin Server", function() RejoinServer() end)
 createKeybind(MiscPage, "Rejoin Keybind", Config.RejoinKey, function(newKey) Config.RejoinKey = newKey end)
-
 createButton(MiscPage, "Quick Exit Game (ESC > L > Enter)", function() QuickExit() end)
 createKeybind(MiscPage, "Quick Exit Keybind", Config.QuickExitKey, function(newKey) Config.QuickExitKey = newKey end)
-
 createButton(MiscPage, "Quick Rebirth Now (ESC > R > Enter)", function() TriggerRebirth() end)
 createKeybind(MiscPage, "Quick Rebirth Keybind", Config.QuickRebirthKey, function(newKey) Config.QuickRebirthKey = newKey end)
 
 createSectionTitle(MiscPage, "SERVER HOPPING (PING < 170ms)")
 createKeybind(MiscPage, "Toggle Menu Keybind", Config.ToggleKey, function(newKey) Config.ToggleKey = newKey end)
-
 createButton(MiscPage, "Hop to Server 1 (Ping < 170)", function(btn)
     btn.Text = "Hopping to Server 1..."
     ServerHopFiltered("Server 1")
 end)
-
 createButton(MiscPage, "Hop to Server 2 (Ping < 170)", function(btn)
     btn.Text = "Hopping to Server 2..."
     ServerHopFiltered("Server 2")
 end)
-
 createButton(MiscPage, "Hop to Server Plus (Ping < 170)", function(btn)
     btn.Text = "Hopping to Server Plus..."
     ServerHopFiltered("Server Plus")
 end)
-
--- Selector สำหรับเลือกประเภท Server ที่ปุ่ม Keybind (H) จะย้ายไป
 createSelector(MiscPage, "Target Mass Hop Type", {"Server 1", "Server 2", "Server Plus"}, Config.TargetServerType, function(selected)
     Config.TargetServerType = selected
 end)
-
 createKeybind(MiscPage, "Server Hop Mass Keybind", Config.ServerHopMassKey, function(newKey) Config.ServerHopMassKey = newKey end)
-
 createButton(MiscPage, "Server Hop Small (<=10 Players)", function(btn)
     btn.Text = "Hopping Small Server..."
     ServerHopFiltered("Small")
@@ -1278,7 +1334,6 @@ local function createCombinedESP(player)
             end
 
             local hpPercent = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
-
             if Config.ESP_HealthBar then
                 healthBarBg.Visible = true
                 healthBarFill.Size = UDim2.new(hpPercent, 0, 1, 0)
@@ -1313,11 +1368,9 @@ end
 for _, p in ipairs(Players:GetPlayers()) do
     if p ~= LocalPlayer then createCombinedESP(p) end
 end
-
 Players.PlayerAdded:Connect(function(p)
     if p ~= LocalPlayer then createCombinedESP(p) end
 end)
-
 Players.PlayerRemoving:Connect(function(p)
     if ESPCache[p] then
         if ESPCache[p].Billboard then ESPCache[p].Billboard:Destroy() end
@@ -1466,7 +1519,6 @@ local CurrentAimTarget = nil
 local CurrentAimHead = nil
 local IsAiming = false
 
--- [ UPDATED STAMINA SYSTEM - HOOKS ] --
 local rawMeta = getrawmetatable and getrawmetatable(game)
 if rawMeta and setreadonly then
     setreadonly(rawMeta, false)
@@ -1509,18 +1561,16 @@ if rawMeta and setreadonly then
     local oldIndex = rawMeta.__index
     rawMeta.__index = newcclosure(function(self, idx)
         if not checkcaller() then
-            -- เพิ่มการดักหลอกค่า (Spoofing) สำหรับระบบ Stamina
             if Config.InfiniteStamina then
                 local prop = tostring(idx)
                 if prop == "Value" and typeof(self) == "Instance" and (self:IsA("NumberValue") or self:IsA("IntValue")) then
                     local name = self.Name:lower()
                     if name:find("stamina") or name:find("energy") or name:find("dash") or name:find("sprint") then
-                        return 130 -- สามารถปรับเป็นเลข Max Stamina ของคุณได้
+                        return 130
                     end
                 end
             end
 
-            -- ระบบ Silent Aim เดิม
             if Config.SilentAim and self == Mouse then
                 if CurrentAimTarget and CurrentAimHead then
                     if idx == "Hit" then return CurrentAimHead.CFrame
@@ -1600,7 +1650,8 @@ RunService.RenderStepped:Connect(function(deltaTime)
         local hum = char:FindFirstChildOfClass("Humanoid")
         local hrp = char:FindFirstChild("HumanoidRootPart")
 
-        if Config.WalkSpeedEnabled and hum and hrp and hum.MoveDirection.Magnitude > 0 then
+        -- ห้ามใช้โปรเดินถ้ากำลังมุดดินอยู่เพื่อกันบัคทะลุ
+        if Config.WalkSpeedEnabled and hum and hrp and hum.MoveDirection.Magnitude > 0 and not IsSnappedDown then
             local baseSpeed = 16
             local targetSpeed = baseSpeed * Config.SpeedMultiplier
             local speedBoost = (targetSpeed - baseSpeed) * deltaTime
@@ -1615,13 +1666,10 @@ RunService.RenderStepped:Connect(function(deltaTime)
         if hum and Config.GodMode then hum.Health = hum.MaxHealth end
         if hum and Config.NoFallDamage then hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false) end
 
-        -- [ UPDATED STAMINA SYSTEM - LOOP ] --
         if Config.InfiniteStamina then
             local MAX_STAMINA = 130
             local function maxOutStamina(targetObject)
                 if not targetObject then return end
-                
-                -- เปลี่ยนจาก GetChildren() เป็น GetDescendants() เพื่อค้นหาให้ลึกขึ้น
                 for _, child in pairs(targetObject:GetDescendants()) do
                     local name = child.Name:lower()
                     if name:find("stamina") or name:find("energy") or name:find("sprint") or name:find("dash") then
@@ -1631,7 +1679,6 @@ RunService.RenderStepped:Connect(function(deltaTime)
                         end
                     end
                 end
-                
                 for attrName, attrValue in pairs(targetObject:GetAttributes()) do
                     local name = attrName:lower()
                     if (name:find("stamina") or name:find("energy") or name:find("sprint") or name:find("dash")) and type(attrValue) == "number" then
@@ -1649,11 +1696,20 @@ end)
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if not gameProcessed then
         if input.UserInputType == Enum.UserInputType.Keyboard then
-            if input.KeyCode == Config.ToggleKey then MainFrame.Visible = not MainFrame.Visible
+            if input.KeyCode == Config.ToggleKey then 
+                MainFrame.Visible = not MainFrame.Visible
             elseif input.KeyCode == Config.AimbotToggleKey then
                 Config.Aimbot = not Config.Aimbot
                 if aimbotSwitch then aimbotSwitch.SetState(Config.Aimbot) end
                 SaveConfig()
+            
+            -- [ NEW ] ปุ่มลัดสำหรับ Toggle การมุดดิน
+            elseif input.KeyCode == Config.SnapDownKey then
+                Config.SnapDown = not Config.SnapDown
+                if SnapDownUI_Toggle then SnapDownUI_Toggle.SetState(Config.SnapDown) end
+                UpdateSnapDown()
+                SaveConfig()
+                
             elseif input.KeyCode == Config.ServerHopMassKey then ServerHopFiltered(Config.TargetServerType)
             elseif input.KeyCode == Config.ServerHopSmallKey then ServerHopFiltered("Small")
             elseif input.KeyCode == Config.QuickExitKey then QuickExit()
