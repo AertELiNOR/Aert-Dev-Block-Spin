@@ -1,5 +1,5 @@
 -- =========================================================
--- Aert-Dev | Block Spin Script (Added Snap Down / มุดดิน)
+-- Aert-Dev | Block Spin Script (Added Snap Down Status HUD)
 -- =========================================================
 
 local Players = game:GetService("Players")
@@ -47,7 +47,6 @@ local Config = {
     GodMode = false,
     NoFallDamage = false,
     
-    -- [ NEW ] Snap Down Config
     SnapDown = false,
     SnapDownOffset = 20,
     SnapDownKey = Enum.KeyCode.Z,
@@ -89,7 +88,6 @@ local function LoadConfig()
         end)
         if success and type(data) == "table" then
             for k, v in pairs(data) do
-                -- Added SnapDownKey to the Enum loader string check
                 if (k == "ToggleKey" or k == "AimbotKey" or k == "AimbotToggleKey" or k == "ServerHopMassKey" or k == "ServerHopSmallKey" or k == "QuickExitKey" or k == "QuickRebirthKey" or k == "RejoinKey" or k == "SnapDownKey") and type(v) == "string" then
                     local successKey, keyEnum = pcall(function() return Enum.KeyCode[v] end)
                     local successMouse, mouseEnum = pcall(function() return Enum.UserInputType[v] end)
@@ -115,7 +113,7 @@ LoadConfig()
 local IsSnappedDown = false
 local SnapOriginalCFrame = nil
 local SnapPlatform = nil
-local SnapDownUI_Toggle = nil -- Reference to UI Switch
+local SnapDownUI_Toggle = nil
 
 local function UpdateSnapDown()
     local char = LocalPlayer.Character
@@ -124,17 +122,14 @@ local function UpdateSnapDown()
     if not hrp then return end
 
     if Config.SnapDown then
-        -- ถ้าเพิ่งเปิด ให้บันทึกตำแหน่งบนดินเอาไว้
         if not IsSnappedDown then
             SnapOriginalCFrame = hrp.CFrame
             IsSnappedDown = true
         end
         
-        -- ปรับตำแหน่งลงใต้ดิน ตามค่า Y Offset
         if SnapOriginalCFrame then
             hrp.CFrame = SnapOriginalCFrame * CFrame.new(0, -Config.SnapDownOffset, 0)
             
-            -- สร้างพื้นล่องหนมารองเท้าไว้กันตก
             if not SnapPlatform then
                 SnapPlatform = Instance.new("Part")
                 SnapPlatform.Name = "AertDev_SnapPlatform"
@@ -144,11 +139,9 @@ local function UpdateSnapDown()
                 SnapPlatform.CanCollide = true
                 SnapPlatform.Parent = workspace
             end
-            -- ขยับพื้นตามใต้เท้า
             SnapPlatform.CFrame = hrp.CFrame * CFrame.new(0, -3.5, 0)
         end
     else
-        -- ถ้ากดปิด ให้ดึงตัวกลับขึ้นมาที่เดิมและลบพื้น
         if IsSnappedDown then
             IsSnappedDown = false
             if SnapOriginalCFrame then
@@ -163,7 +156,6 @@ local function UpdateSnapDown()
     end
 end
 
--- Reset SnapDown if character dies
 LocalPlayer.CharacterAdded:Connect(function()
     if Config.SnapDown then
         Config.SnapDown = false
@@ -558,6 +550,9 @@ local AimbotStatusLabel = createHUDLabel(46, 'Aimbot: <font color="#FF4D4D">OFF<
 local PlayerCountLabel = createHUDLabel(77, 'Players: <font color="#38BDF8">0/0</font>')
 ServerStatusLabel = createHUDLabel(108, string.format('Server: <font color="#818CF8">%s</font>', DetectServerType()))
 
+-- [ NEW ] เพิ่ม Snap Status Label ไว้ใต้ Server
+local SnapDownStatusLabel = createHUDLabel(139, 'Snap: <font color="#FF4D4D">OFF</font>')
+
 local TopRightFPS = Instance.new("TextLabel")
 TopRightFPS.Name = "TopRightFPS"
 TopRightFPS.Parent = ScreenGui
@@ -577,7 +572,7 @@ fpsStroke.Color = Color3.fromRGB(0, 0, 0)
 fpsStroke.Parent = TopRightFPS
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 580, 0, 420) -- ขยายขนาดนิดหน่อยเผื่อเพิ่มปุ่ม
+MainFrame.Size = UDim2.new(0, 580, 0, 420)
 MainFrame.Position = UDim2.new(0.5, -290, 0.5, -210)
 MainFrame.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
 MainFrame.BorderSizePixel = 0
@@ -1021,7 +1016,6 @@ createSwitch(CharacterPage, "Infinite Stamina", Config.InfiniteStamina, function
 createSwitch(CharacterPage, "God Mode", Config.GodMode, function(v) Config.GodMode = v end)
 createSwitch(CharacterPage, "No Fall Damage", Config.NoFallDamage, function(v) Config.NoFallDamage = v end)
 
--- [ NEW ] Snap Down UI
 createSectionTitle(CharacterPage, "SNAP DOWN (มุดดิน)")
 SnapDownUI_Toggle = createSwitch(CharacterPage, "Snap down", Config.SnapDown, function(v)
     Config.SnapDown = v
@@ -1608,6 +1602,13 @@ RunService.RenderStepped:Connect(function(deltaTime)
         AimbotStatusLabel.Text = ' Aimbot: <font color="#FF4D4D"><b>OFF</b></font>' 
     end
 
+    -- [ NEW ] อัปเดตข้อความบน Snap Down HUD
+    if Config.SnapDown then
+        SnapDownStatusLabel.Text = ' Snap: <font color="#2ECC71"><b>ON</b></font>'
+    else
+        SnapDownStatusLabel.Text = ' Snap: <font color="#FF4D4D"><b>OFF</b></font>'
+    end
+
     local currentPlayers = #Players:GetPlayers()
     local maxPlayers = Players.MaxPlayers
     PlayerCountLabel.Text = string.format(' Players: <font color="#38BDF8"><b>%d/%d</b></font>', currentPlayers, maxPlayers)
@@ -1650,7 +1651,6 @@ RunService.RenderStepped:Connect(function(deltaTime)
         local hum = char:FindFirstChildOfClass("Humanoid")
         local hrp = char:FindFirstChild("HumanoidRootPart")
 
-        -- ห้ามใช้โปรเดินถ้ากำลังมุดดินอยู่เพื่อกันบัคทะลุ
         if Config.WalkSpeedEnabled and hum and hrp and hum.MoveDirection.Magnitude > 0 and not IsSnappedDown then
             local baseSpeed = 16
             local targetSpeed = baseSpeed * Config.SpeedMultiplier
@@ -1702,14 +1702,11 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
                 Config.Aimbot = not Config.Aimbot
                 if aimbotSwitch then aimbotSwitch.SetState(Config.Aimbot) end
                 SaveConfig()
-            
-            -- [ NEW ] ปุ่มลัดสำหรับ Toggle การมุดดิน
             elseif input.KeyCode == Config.SnapDownKey then
                 Config.SnapDown = not Config.SnapDown
                 if SnapDownUI_Toggle then SnapDownUI_Toggle.SetState(Config.SnapDown) end
                 UpdateSnapDown()
                 SaveConfig()
-                
             elseif input.KeyCode == Config.ServerHopMassKey then ServerHopFiltered(Config.TargetServerType)
             elseif input.KeyCode == Config.ServerHopSmallKey then ServerHopFiltered("Small")
             elseif input.KeyCode == Config.QuickExitKey then QuickExit()
