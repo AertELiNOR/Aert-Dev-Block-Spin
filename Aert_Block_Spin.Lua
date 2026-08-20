@@ -56,7 +56,7 @@ local Config = {
     ServerHopSmallKey = Enum.KeyCode.KeypadPlus,
 
     TargetServerType = "Server Plus", -- Default Mass Hop Target: Server 1, Server 2, Server Plus
-    MaxPingThreshold = 200 -- กรอง ปิง < 200ms
+    MaxPingThreshold = 170 -- แก้ไขเป็น กรอง ปิง < 170ms
 }
 
 -- Config Save & Load System
@@ -213,7 +213,7 @@ local function ServerHopFiltered(targetType)
                         isMatch = (server.playing >= 8)
                     end
 
-                    -- กรองเงื่อนไข Ping < 200ms
+                    -- กรองเงื่อนไข Ping < 170ms
                     if isMatch and ping < Config.MaxPingThreshold then
                         table.insert(validServers, server)
                     end
@@ -234,7 +234,7 @@ local function ServerHopFiltered(targetType)
         TeleportService:TeleportToPlaceInstance(targetPlaceId, targetServer.id, LocalPlayer)
     else
         if ServerStatusLabel then
-            ServerStatusLabel.Text = ' Server: <font color="#FF4D4D">No Ping <200 Server</font>'
+            ServerStatusLabel.Text = ' Server: <font color="#FF4D4D">No Ping <170 Server</font>'
         end
     end
 end
@@ -982,20 +982,20 @@ createKeybind(MiscPage, "Quick Exit Keybind", Config.QuickExitKey, function(newK
 createButton(MiscPage, "Quick Rebirth Now (ESC > R > Enter)", function() TriggerRebirth() end)
 createKeybind(MiscPage, "Quick Rebirth Keybind", Config.QuickRebirthKey, function(newKey) Config.QuickRebirthKey = newKey end)
 
-createSectionTitle(MiscPage, "SERVER HOPPING (PING < 200ms)")
+createSectionTitle(MiscPage, "SERVER HOPPING (PING < 170ms)")
 createKeybind(MiscPage, "Toggle Menu Keybind", Config.ToggleKey, function(newKey) Config.ToggleKey = newKey end)
 
-createButton(MiscPage, "Hop to Server 1 (Ping < 200)", function(btn)
+createButton(MiscPage, "Hop to Server 1 (Ping < 170)", function(btn)
     btn.Text = "Hopping to Server 1..."
     ServerHopFiltered("Server 1")
 end)
 
-createButton(MiscPage, "Hop to Server 2 (Ping < 200)", function(btn)
+createButton(MiscPage, "Hop to Server 2 (Ping < 170)", function(btn)
     btn.Text = "Hopping to Server 2..."
     ServerHopFiltered("Server 2")
 end)
 
-createButton(MiscPage, "Hop to Server Plus (Ping < 200)", function(btn)
+createButton(MiscPage, "Hop to Server Plus (Ping < 170)", function(btn)
     btn.Text = "Hopping to Server Plus..."
     ServerHopFiltered("Server Plus")
 end)
