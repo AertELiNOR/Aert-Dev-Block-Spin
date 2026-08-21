@@ -26,6 +26,7 @@ local Config = {
     AimbotSmoothness = 100,
     
     SilentAim = true,
+    Wallbang = false,
     RedLineLock = true,
     FOV = 300,
     ShowFOV = true,
@@ -576,7 +577,7 @@ MainFrame.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
-MainFrame.Visible = false -- ซ่อนเมนูหลักในครั้งแรกที่รันสคริปต์
+MainFrame.Visible = false
 MainFrame.Parent = ScreenGui
 
 FloatingToggle.MouseButton1Click:Connect(function()
@@ -994,6 +995,7 @@ createSlider(CombatPage, "Aim Smoothness (%)", 1, 100, Config.AimbotSmoothness, 
 
 createSectionTitle(CombatPage, "SILENT AIM")
 createSwitch(CombatPage, "Silent Aim", Config.SilentAim, function(v) Config.SilentAim = v end)
+createSwitch(CombatPage, "Wallbang", Config.Wallbang, function(v) Config.Wallbang = v end)
 createSwitch(CombatPage, "Red Line Lock", Config.RedLineLock, function(v) Config.RedLineLock = v end)
 createSwitch(CombatPage, "Show FOV Circle", Config.ShowFOV, function(v) Config.ShowFOV = v end)
 createSlider(CombatPage, "FOV Radius", 50, 800, Config.FOV, false, function(v) Config.FOV = v end)
@@ -1535,8 +1537,23 @@ if rawMeta and setreadonly then
                     if method == "Raycast" and self == workspace then
                         local origin = args[1]
                         local direction = args[2]
+                        local raycastParams = args[3]
+                        
                         if origin and direction then
                             args[2] = (CurrentAimHead.Position - origin).Unit * direction.Magnitude
+                            
+                            if Config.Wallbang then
+                                local newParams = RaycastParams.new()
+                                newParams.FilterType = Enum.RaycastFilterType.Include
+                                newParams.FilterDescendantsInstances = {CurrentAimTarget.Character}
+                                
+                                if raycastParams then
+                                    newParams.IgnoreWater = raycastParams.IgnoreWater
+                                    newParams.CollisionGroup = raycastParams.CollisionGroup
+                                end
+                                args[3] = newParams
+                            end
+                            
                             return oldNamecall(self, unpack(args))
                         end
                     elseif method:find("FindPartOnRay") then
@@ -1545,6 +1562,11 @@ if rawMeta and setreadonly then
                             local origin = oldRay.Origin
                             local direction = oldRay.Direction
                             args[1] = Ray.new(origin, (CurrentAimHead.Position - origin).Unit * direction.Magnitude)
+                            
+                            if Config.Wallbang then
+                                return CurrentAimHead, CurrentAimHead.Position, Vector3.new(0, 1, 0), CurrentAimHead.Material
+                            end
+                            
                             return oldNamecall(self, unpack(args))
                         end
                     end
